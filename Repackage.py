@@ -190,9 +190,9 @@ class Repackager():
 			f.write(footer)
 		
 		# clean up temp files.
-		#os.remove("temp_0.bin")
-		#os.remove("temp_1.bin")
-		#os.remove("temp_2.bin")
+		os.remove("temp_0.bin")
+		os.remove("temp_1.bin")
+		os.remove("temp_2.bin")
 
 		return print("Repackage Finished")
 
