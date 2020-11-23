@@ -214,7 +214,7 @@ if __name__ == "__main__":
 	args = parser.parse_args()
 	
 	if args.keyfile is None:
-		print("Tool requires keyfile provided by -k flag")
+		raise ValueError("Tool requires keyfile provided by -k flag")
 
 	Repack = Repackager(keyfile=args.keyfile)
 
