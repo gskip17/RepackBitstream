@@ -1,0 +1,5 @@
+*.bin
+*.bit
+*.txt
+*.log
+__pycache__
