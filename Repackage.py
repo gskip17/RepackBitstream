@@ -107,7 +107,7 @@ class Repackager():
 			f.write(ptext)	
 			IV = ciphertext 
 		
-	def repack(self, enc_name, modified_name, output_filename="modified_bitstream"):
+	def repack(self, enc_name, modified_name, insert, output_filename="modified_bitstream"):
 			
 		new_digest = self.calc_digest(modified_name)
 		print(BitArray(new_digest).hex)
@@ -122,7 +122,7 @@ class Repackager():
 
 		ciphertext = Repack.get_full_ciphertext(enc_name)
 		open("temp_0.bin","wb").write(ciphertext)
-		deciphered = Repack.decrypt("temp_0.bin", output_name="temp_0.bin")	
+		#deciphered = Repack.decrypt("temp_0.bin", output_name="temp_0.bin")	
 		
 		MODIFIED_CONTENT = open(modified_name,"rb").read()
 
@@ -167,6 +167,11 @@ class Repackager():
 			Finally, we need to reattach the plaintext portions of the bitstream before and after the ciphertext. 
 
 		'''
+		if(insert):
+			with open("result","rb") as f:
+				with open("temp_2.bin","wb") as f1:
+					for line in f:
+						f1.write(line)
 
 
 		stream = io.BytesIO(open(enc_name,"rb").read())
@@ -190,9 +195,9 @@ class Repackager():
 			f.write(footer)
 		
 		# clean up temp files.
-		os.remove("temp_0.bin")
-		os.remove("temp_1.bin")
-		os.remove("temp_2.bin")
+		#os.remove("temp_0.bin")
+		#os.remove("temp_1.bin")
+		#os.remove("temp_2.bin")
 
 		return print("Repackage Finished")
 
@@ -210,11 +215,12 @@ if __name__ == "__main__":
 	parser.add_argument("--keyfile", "-k", type=str, default=None, help="Input .nky keyfile name")
 	parser.add_argument("--decrypt", "-D", type=bool, default=False, help="Decrypt bitstream")
 	parser.add_argument("--repack", "-R", type=str, default=None, help="Repackage Bitstream with <param> binary file")
+	parser.add_argument("--insert", "-i", type=bool, default=False, help="Insert your own ciphertext")
 
 	args = parser.parse_args()
 	
 	if args.keyfile is None:
-		raise ValueError("Tool requires keyfile provided by -k flag")
+		print("Tool requires keyfile provided by -k flag")
 
 	Repack = Repackager(keyfile=args.keyfile)
 
@@ -224,7 +230,7 @@ if __name__ == "__main__":
 		Repack.decrypt_fabric(args.bitfile)
 
 	if args.repack is not None:
-		Repack.repack(args.bitfile, args.repack, output_filename="mod.bit")
+		Repack.repack(args.bitfile, args.repack, args.insert, output_filename="mod.bit")
 
 	# Snippets for other uses -
 
