@@ -32,11 +32,11 @@ class HashHelper(object):
                 word = self.stream.read(CHUNK_SIZE)
                 digest = self.sha256.hexdigest()
         finally:
-            print("Finished, closing file.")
+            #print("Finished, closing file.")
             self.stream.close()
 
-        print("Digest Finished")
-        print("Digest Value", binascii.hexlify(self.sha256.digest()))
+        #print("Digest Finished")
+        print("New Digest Value", binascii.hexlify(self.sha256.digest()))
         print("Digest Size", self.sha256.digest_size)
         print("Block Size", self.sha256.block_size)
 

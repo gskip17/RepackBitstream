@@ -1,46 +1,22 @@
 # Repackage Bitstream
 
+### Decrypt Bitstream
+Decrypt any encrypted Xilinx 7-series bitstream. Must provide the encryption key file (.nky) produced by Vivado.
+
+`$ python3 Repackage.py <bitstream.bit> -d -k <key.nky>`
+
+This will produce `decrypted_bitstream.bin` which will only contain the plaintext decrypted from the original bitstream. If a full decrypted bitstream is desirable then the repack (-r) command should be used, which is explained below.
+
+### Repackage Bitstream
+This script is used to repackage an encrypted Xilinx 7-series bitstream with the provided plaintext file. Again the encryption key file (.nky) must be provided.
+
+The plaintext file should have the structure of shown below. The decrypted header/footer configuration commands must be included alongside the modified fabric. They can be copied from the original encrypted bitstream.
+```
+Decrypted Header Configuration Commands
+Modified Fabric
+Decrypted Footer Configuration Commands
 ```
 
-$ python3 Repackage.py -h
-usage: Repackage.py [-h] [--output OUTPUT] [--keyfile KEYFILE]
-                    [--decrypt DECRYPT] [--repack REPACK]
-                    BITFILE
+`$ python3 Repackage.py <bitstream.bit> -r <plaintext_file> -k <key.nky> -o <output_file>`
 
-Decrypt and Repackage Encrypted BASYS3 Bitstreams.
-
-positional arguments:
-  BITFILE               Input bit file name
-
-optional arguments:
-  -h, --help            show this help message and exit
-  --output OUTPUT, -o OUTPUT
-                        Output bin file name
-  --keyfile KEYFILE, -k KEYFILE
-                        Input .nky keyfile name
-  --decrypt DECRYPT, -D DECRYPT
-                        Decrypt bitstream
-  --repack REPACK, -R REPACK
-                        Repackage Bitstream with <param> binary file
-
-```
-
-```
-# Program device using xc3sprog
-JTAG_DEBUG=jtag_output.txt FTDI_DEBUG=usb_traffic.txt xc3sprog -c nexys4 -p 0 mod.bit
-```
-
-1) Call `Python3 Repackage.py <bitstream> -D True -k <path to .nky file>`
-
-This will decrypt the encrypted bitstream file and output a `temp_decrypted.bin`.
-
-`temp_decrypted.bin` can be modified and later repackaged into the encrypted format.
-
-`-k` flag requires a .nky keyfile to perform decryption properly.
-
-
-2) Call `python3 Repackage.py <encrypted bitstream> -R <path to modified payload> -k <path to key file>`
-
-Example `python3 Repackage.py enc.bit -R temp_decrypted.bin -k key.nky`
-
-This will generate a new bitstream that is reencrypted with the modified .bin content and produce a bitstream called `mod.bit`.
+This will produce three intermediate files (`ciphertext.bin`, `new_ciphertext.bin`, `plaintext.bin`) which can be found in the `run` directory after the script is finished. `ciphertext.bin` will include all of the ciphertext from the original encrypted bitstream provided. `new_ciphertext.bin` will include the newly calculated ciphertext from the re-encryption process. Then `plaintext.bin` will include the HMAC header/footer plaintext plus the users provided modified plaintext. The `-o` output file can be designated by the user or is defaulted to `full_encrypted.bit`. This file contains the full new encrypted bitstream with all of the unencrypted sections glued on. `full_decrypted.bit` will contain the same new bitstream but is decrypted. 
