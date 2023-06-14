@@ -1,4 +1,4 @@
-from app import *
+from decryption import *
 from bitstring import BitArray
 from hmac_helper import HashHelper
 from crypto import *
@@ -20,12 +20,11 @@ class Repackager():
 			self.IV      = None
 
 		self.crypto_helper = AESCipher(key=self.AES_KEY)			
-		self.key = b'\x00'
 		return
 	
 	def decrypt_fabric(self, filename):
 		read = io.BytesIO(open(filename, "rb").read())
-		decryptor = DecryptParser(read, output="temp_decrypted.bin", key=self.key, hmac_out=False)
+		decryptor = DecryptParser(read, output="decrypted_bitstream.bin", key=self.AES_KEY, hmac_out=False)
 		decryptor.handle_bit()
 
 	def calc_digest(self, filename):	
@@ -60,14 +59,16 @@ class Repackager():
 	def get_full_ciphertext(self, filename):	
 		
 		stream = io.BytesIO(open(filename, "rb").read())
-		stream, p = self._read_until_match(stream, b'\x30\x03\x40\x01')
+		stream, p = self._read_until_match(stream, b'\x30\x01\x60\x04')
+		IV = stream.read(16)
+		DWC_CMD = stream.read(4)
 
 		# Number of words to read until end of ciphertext
 		DWC = BitArray(stream.read(4)).int
 		
 		ciphertext = stream.read(DWC * 4)
 	
-		return ciphertext
+		return ciphertext, IV
 
 	def encrypt(self, filename):
 		raw_bytes = open(filename,"rb").read() 
@@ -106,11 +107,24 @@ class Repackager():
 			ptext = cipher.decrypt_word(ciphertext, iv=IV, xor=False)
 			f.write(ptext)	
 			IV = ciphertext 
+
+	def decrypt_blocks(self, ciphertext, IV):
+		stream = io.BytesIO(ciphertext)
+		cipher = AESCipher(key=self.AES_KEY)
+		plaintext = b''
+		while True:
+			ciphertext = stream.read(16)
+
+			if ciphertext == b'':
+				return plaintext, IV
+
+			plaintext += cipher.decrypt_word(ciphertext, iv=IV, xor=False)
+			IV = ciphertext
+
 		
-	def repack(self, enc_name, modified_name, output_filename="modified_bitstream"):
+	def repack(self, enc_name, modified_name, insert, output_filename="modified_bitstream"):
 			
 		new_digest = self.calc_digest(modified_name)
-		print(BitArray(new_digest).hex)
 		
 		'''
 			First thing we need to do is isolate the ciphertext from the original file.
@@ -120,27 +134,27 @@ class Repackager():
 			We also need to apply the new HMAC digest to the end.
 		'''
 
-		ciphertext = Repack.get_full_ciphertext(enc_name)
-		open("temp_0.bin","wb").write(ciphertext)
-		deciphered = Repack.decrypt("temp_0.bin", output_name="temp_0.bin")	
+		ciphertext, IV = Repack.get_full_ciphertext(enc_name)
+		open("ciphertext.bin","wb").write(ciphertext)
+		#deciphered = Repack.decrypt("temp_0.bin", output_name="temp_0.bin")	
 		
 		MODIFIED_CONTENT = open(modified_name,"rb").read()
 
-		with open("temp_1.bin", "wb") as f:
+		with open("plaintext.bin", "wb") as f:
 			
-			stream = io.BytesIO(open("temp_0.bin", "rb").read())
+			stream = io.BytesIO(open("ciphertext.bin", "rb").read())
 			
-			orig_IPAD   = stream.read(64)
-			orig_body   = stream.read(len(MODIFIED_CONTENT))
-			orig_OPAD   = stream.read(448)
-			orig_digest = stream.read(32)
+			orig_IPAD, IV   = self.decrypt_blocks(stream.read(64), IV)
+			orig_body   	= stream.read(len(MODIFIED_CONTENT))
+			orig_OPAD, IV   = self.decrypt_blocks(stream.read(448), orig_body[-16:])
+			orig_digest 	= stream.read(32)
 			
 			f.write(orig_IPAD)
 			f.write(MODIFIED_CONTENT)
 			f.write(orig_OPAD)
 			f.write(new_digest)
 		
-		stream = io.BytesIO(open("temp_1.bin","rb").read())
+		stream = io.BytesIO(open("plaintext.bin","rb").read())
 		
 		IV = self.IV
 
@@ -150,7 +164,7 @@ class Repackager():
 
 		'''
 
-		with open("temp_2.bin","wb") as f:
+		with open("new_ciphertext.bin","wb") as f:
 			while True:
 				data = stream.read(16)
 					
@@ -167,6 +181,11 @@ class Repackager():
 			Finally, we need to reattach the plaintext portions of the bitstream before and after the ciphertext. 
 
 		'''
+		if(insert):
+			with open("result","rb") as f:
+				with open("new_ciphertext.bin","wb") as f1:
+					for line in f:
+						f1.write(line)
 
 
 		stream = io.BytesIO(open(enc_name,"rb").read())
@@ -175,7 +194,7 @@ class Repackager():
 		body = stream.read(BitArray(DWC).int * 4)
 		footer = stream.read(2000)
 
-		modified_ciphertext = open("temp_2.bin","rb").read()
+		modified_ciphertext = open("new_ciphertext.bin","rb").read()
 
 		with open(output_filename,"wb") as f:
 			f.write(config_header)
@@ -183,19 +202,17 @@ class Repackager():
 			f.write(modified_ciphertext)
 			f.write(footer)
 
-		with open("full_dec.bit","wb") as f:
+		with open("full_decrypted.bit","wb") as f:
 			f.write(config_header)
 			f.write(DWC)
-			f.write(open("temp_1.bin","rb").read())
+			f.write(open("plaintext.bin","rb").read())
 			f.write(footer)
 		
-		# clean up temp files.
-		os.remove("temp_0.bin")
-		os.remove("temp_1.bin")
-		os.remove("temp_2.bin")
+		os.rename("plaintext.bin", "run/plaintext.bin")
+		os.rename("ciphertext.bin", "run/ciphertext.bin")
+		os.rename("new_ciphertext.bin", "run/new_ciphertext.bin")
 
 		return print("Repackage Finished")
-
 
 
 if __name__ == "__main__":
@@ -208,23 +225,30 @@ if __name__ == "__main__":
                         help="Input bit file name")
 	parser.add_argument("--output", "-o", type=str, help="Output bin file name", default=None)
 	parser.add_argument("--keyfile", "-k", type=str, default=None, help="Input .nky keyfile name")
-	parser.add_argument("--decrypt", "-D", type=bool, default=False, help="Decrypt bitstream")
-	parser.add_argument("--repack", "-R", type=str, default=None, help="Repackage Bitstream with <param> binary file")
+	parser.add_argument("--decrypt", "-d", action='store_true', help="Decrypt bitstream")
+	parser.add_argument("--repack", "-r", type=str, default=None, help="Repackage Bitstream with <param> binary file")
+	parser.add_argument("--insert", "-i", type=bool, default=False, help="Insert your own ciphertext")
 
 	args = parser.parse_args()
 	
 	if args.keyfile is None:
-		raise ValueError("Tool requires keyfile provided by -k flag")
+		print("Tool requires keyfile provided by -k flag")
 
 	Repack = Repackager(keyfile=args.keyfile)
 
 	# Parse and Decrypt
 	
-	if args.decrypt == True:
+	if args.decrypt:
 		Repack.decrypt_fabric(args.bitfile)
 
-	if args.repack is not None:
-		Repack.repack(args.bitfile, args.repack, output_filename="mod.bit")
+	# Parse, Decrypt, and Repackage
+
+	if args.repack:
+		if args.output == None:
+			output = "full_encrypted.bit"
+			Repack.repack(args.bitfile, args.repack, args.insert, output_filename="full_encrypted.bit")
+		else:
+			Repack.repack(args.bitfile, args.repack, args.insert, output_filename=args.output)
 
 	# Snippets for other uses -
 

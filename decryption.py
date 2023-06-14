@@ -4,6 +4,7 @@ import sys
 from bitstring import BitArray
 from type1_handler import Type1
 from type2_handler import Type2
+import tools
 from crypto import AESCipher
 import binascii
 import subprocess
@@ -21,18 +22,19 @@ assert registers[0b01100] == "IDCODE"
 opcode_list = list("NOP Read Write Reserved".split())
 
 class DecryptParser:
-    def __init__(self, stream, find_addr=None, output=None, key=None, hmac_out=False, full=False):
+    def __init__(self, stream, find_addr=None, output=None, key=None, hmac_out=True, full=False):
         self.stream = stream
         self.find_addr = find_addr
         self.print_next_payload = False
         self.decrypt_start = False
+        self.decrypt_count = 0
         self.output_file = output
         self.hmac_out = hmac_out
         self.full = full
         if key is not None:
-
+            self.cipher = AESCipher(key)
             #self.cipher = AESCipher(b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xaa\xaa\xbb\xbb\xcc\xcc\xdd\xdd')
-            self.cipher = AESCipher(b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+            #self.cipher = AESCipher(b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
         else:
             print("No Key Supplied, exitting")
             sys.exit(0)
@@ -89,14 +91,16 @@ class DecryptParser:
             self.handle_keystart(key)
             if key == b"e":
                 length, = struct.unpack(">I", self.stream.read(4))
+                length = length * 8 
                 self.handle_binstart(length)
-                self.handle_bin(end_at=self.stream.tell() + length)
+                self.handle_bin(end_at=length)
+                break
             elif key in b"abcd":
                 data = self.stream.read(*struct.unpack(">H",
                     self.stream.read(2)))
                 self.handle_meta(key, data)
             else:
-                print("Unknown key: {}: {}".format(key, d))
+                print("Unknown key: {}".format(key))
 
     def handle_bitstart(self, a, unk, b):
         pass
@@ -125,19 +129,16 @@ class DecryptParser:
     def handle_bin(self, end_at=None):
         sync = b""
         count = 0
-        first_block = True
-
-        # some edits to show behavior
+        # read to SYNC word
         while not sync.endswith(b"\xaa\x99\x55\x66"):
             sync += self.stream.read(1)
             count = count + 1 
-        # python will print \xaa\x99Uf, Uf in ascii encoding is \x55\x66.
-        print("Number of padded words after Header end: ", count)
-        print("Ended on", sync[-8:])
-        # end edits
+        print("Padded words before SYNC: {}".format((count/4 - 1)))
  
-        OPAD_count = 0
-        
+        first_block = True
+        HMAC_KEY = b''
+        IPAD_BLOCK = b'\x36'*16
+        OPAD_BLOCK = b'\x5c'*16
         '''
          Here begins actual packet parsing
         '''
@@ -154,7 +155,7 @@ class DecryptParser:
             
 
             if len(hdr) != 4:
-                assert end is None
+                assert end_at is None
                 assert len(hdr) == 0
                 break
             hdr_un, = struct.unpack(">I", hdr)
@@ -169,60 +170,36 @@ class DecryptParser:
                 '''
                 # read in more cipher text to 16 bytes
                 ciphertext = hdr + self.stream.read(12)
-               
-                # if this is the very first block being decrypted, it is the HKEY
-                if first_block: 
-                    plaintext = self.cipher.decrypt_word(ciphertext, iv=self.CBC_IV, xor=True) 
-                    print("decrypted HMAC Key P1: ", binascii.hexlify(plaintext))
-                    first_block = False 
-                    second_block = True
-                    self.CBC_IV = ciphertext
-                    if self.hmac_out:
-                        self.write_decrypted_bin(plaintext)
-                    continue
-               
-                if second_block: 
-                    plaintext = self.cipher.decrypt_word(ciphertext, iv=self.CBC_IV, xor=True) 
-                    print("decrypted HMAC Key P2: ", binascii.hexlify(plaintext))
-                    second_block = False
-                    self.CBC_IV = ciphertext
-                    if self.hmac_out:
-                        self.write_decrypted_bin(plaintext)
-                    continue
-                else:
-                    try:
-                        plaintext = self.cipher.decrypt_word(ciphertext, iv=self.CBC_IV, xor=False, swap=True)
-                        #print("decrypted: ", binascii.hexlify(plaintext))       
-                    except:
-                        print("Unexpected error when decrypting bytes - ", ciphertext)
-                        print("End of file may have been reached")
-                        sys.exit(0)
 
-                if binascii.hexlify(plaintext) == b'36363636363636363636363636363636' or binascii.hexlify(plaintext) == b'6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c':
+                # if this is the very first block being decrypted, it is the HKEY
+                try:
+                    plaintext = self.cipher.decrypt_word(ciphertext, iv=self.CBC_IV, xor=False, swap=True)
+
+                    if first_block:
+                        HMAC_KEY += tools.xor_bytes(plaintext, IPAD_BLOCK)
+                        first_block = False
+                        second_block = True
+                    elif second_block:
+                        HMAC_KEY += tools.xor_bytes(plaintext, IPAD_BLOCK)
+                        second_block = False
+                        print("HMAC Key: {}".format(HMAC_KEY.hex()))
+                except:
+                    print("Unexpected error when decrypting bytes - ", ciphertext)
+                    print("End of file may have been reached")
+                    sys.exit(0)
+
+                if plaintext == IPAD_BLOCK or plaintext == OPAD_BLOCK:
                     if self.hmac_out:
                         self.write_decrypted_bin(self.cipher.decrypt_word(ciphertext,iv=self.CBC_IV,xor=True))
-                    self.CBC_IV = ciphertext
-                    continue
-                if self.output_file is not None:
-                    if binascii.hexlify(plaintext) == b'5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c':
-                        OPAD_count = (OPAD_count + 1) 
-                        #sys.exit(0)
-                    elif b'80000000000000000000000000000000' == binascii.hexlify(plaintext):#or b'010b6400' in binascii.hexlify(plaintext):
-                        print("Found END of HMAC Calc")
-                        print(plaintext)
-                        print(binascii.hexlify(plaintext)) 
-                        if not self.full:
-                            sys.exit(0)
-                    #elif b'923d8e2a' in binascii.hexlify(plaintext):
-                    #    sys.exit(0)
-
-                    if OPAD_count >= 3:
-                        print("OPAD Reached, returning")
-                        #sys.exit(0)    
-
+                if self.output_file:
                     self.write_decrypted_bin(plaintext)
 
                 self.CBC_IV = ciphertext
+
+                self.decrypt_count -= 4
+                # Stop decryption 
+                if self.decrypt_count == 0:
+                    break
         
         self.handle_end() 
 
@@ -291,15 +268,15 @@ class DecryptParser:
         '''
         if registers[self.addr] == "CBC": 
             self.CBC_IV = packet.CBC_IV 
-            print("Found AES", binascii.hexlify(packet.CBC_IV))
+            print("Initial IV: 0x{}".format(packet.CBC_IV.hex()))
         '''
 			Once we hit the DWC register, we know that the next bytes read
 			are the beginning of the encrypted ciphertext.
         '''
         if registers[self.addr] == "DWC":
             self.decrypt_start = True
-            print((hdr))
-            print("Decrypted Word Cound: ", binascii.hexlify(packet.payload))        
+            self.decrypt_count = int.from_bytes(packet.payload, 'big')
+            print("Decrypted Word Count: 0x{}".format(packet.payload.hex()))        
 
         #self.handle_op(op, hdr, payload)
     
